@@ -2,125 +2,139 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# --- 1. CONFIGURATION & SETTINGS ---
-st.set_page_config(page_title="AI Club Treasury AI", layout="wide", page_icon="💰")
+# --- 1. CONFIGURATION & UI SETUP ---
+st.set_page_config(page_title="AI Club Treasury Bot", layout="wide", page_icon="💰")
 
-# Your specific Google Sheet ID
-SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
-GSHEET_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
-
-# Professional Dark Theme CSS
+# Custom CSS for a professional Dark Mode/Finance look
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
-    [data-testid="stMetricValue"] { font-size: 24px; color: #00d4ff; }
-    .stChatFloatingInputContainer { background-color: #161b22; }
-    .stChatMessage { border-radius: 15px; margin-bottom: 10px; border: 1px solid #30363d; }
+    .stMetric { background-color: #1e2130; padding: 15px; border-radius: 10px; border: 1px solid #3e4255; }
+    [data-testid="stSidebar"] { background-color: #161b22; border-right: 1px solid #30363d; }
+    .stChatMessage { border-radius: 15px; border: 1px solid #30363d; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SIDEBAR ---
+# Your specific Google Sheet
+SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
+GSHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+
+# --- 2. SIDEBAR (Setup & Live Connection) ---
 with st.sidebar:
     st.title("🔑 Treasurer Access")
     password = st.text_input("Treasurer Password", type="password")
     api_key = st.text_input("Gemini API Key", type="password")
     
     st.markdown("---")
-    if st.button("🗑️ Clear Chat History"):
+    if st.button("🗑️ Reset Chat History"):
         st.session_state.messages = []
         st.rerun()
     
-    st.info("💡 **Live Sync Active:** The bot reads your Google Sheet every time you send a message.")
+    st.success("✅ Google Sheet Linked")
+    st.info("💡 **Pro-Tip:** Make sure Row 1 of your Google Sheet contains your Column Headers (Date, Amount, etc.) to avoid 'Unnamed' columns.")
 
-# --- 3. DATA LOADING FUNCTION ---
-@st.cache_data(ttl=60) # Refreshes every 60 seconds
+# --- 3. HELPER FUNCTIONS ---
 def load_live_data():
     try:
-        df = pd.read_csv(GSHEET_CSV_URL)
-        # Basic cleaning for Google Sheets quirks
+        # Fetch data from Google Sheet
+        df = pd.read_csv(GSHEET_URL)
+        # Clean up: Drop rows/columns that are totally empty
         df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
         return df
     except Exception as e:
-        st.error(f"Failed to connect to Google Sheets: {e}")
+        st.error(f"Error connecting to Google Sheets: {e}")
         return None
 
-# --- 4. MAIN INTERFACE ---
-st.title("💰 AI Club Treasury Dashboard")
-
+# --- 4. MAIN APP LOGIC ---
 if password == "AICLUBTREASURE" and api_key:
+    # Configure AI
     genai.configure(api_key=api_key)
     
     # Initialize Chat History
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Load the Data
+    # A. Fetch Live Data
     df = load_live_data()
 
     if df is not None:
-        # Dashboard Summary Cards
-        st.subheader("📊 Live Budget Metrics")
+        # B. Model Selector (Avoids the 404 Error)
+        with st.sidebar:
+            st.markdown("### 🤖 Select AI Brain")
+            try:
+                # Find only the models your key is authorized to use
+                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                selected_model_id = st.selectbox("Switch model if you get errors:", available_models, index=0)
+                model = genai.GenerativeModel(selected_model_id)
+            except Exception as model_err:
+                st.error("Could not fetch models. Using default.")
+                model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # C. Visual Dashboard Metrics
+        st.title("💰 AI Club Treasury Assistant")
+        st.markdown("---")
+        
         m1, m2, m3 = st.columns(3)
         with m1:
-            st.metric("Ledger Status", "Connected", "Live")
+            st.metric("Ledger Status", "Connected", "Live Sync")
         with m2:
-            st.metric("Latest Update", pd.Timestamp.now().strftime('%H:%M:%S'))
+            st.metric("Rows Tracked", len(df))
         with m3:
-            st.metric("Budget Year", "2025-2026")
+            st.metric("Active Year", "2025-2026")
 
-        # Hidden Data View
-        with st.expander("📂 View Raw Sheet Data"):
+        # Expander for Raw Data
+        with st.expander("📂 Show Live Spreadsheet Data"):
             st.dataframe(df, use_container_width=True)
 
         st.markdown("---")
 
-        # --- CHATBOT SECTION ---
-        # Display existing messages
+        # D. Chatbot Interface
+        st.subheader("💬 Chat with your Ledger")
+        
+        # Display chat messages from history on app rerun
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
 
-        # Chat Input
-        if prompt := st.chat_input("Ask about a budget item or ASUO policy..."):
+        # Chat Input Bar (Standard Chatbot style at bottom)
+        if user_query := st.chat_input("Ask a question (e.g., 'Can we afford $200 for pizza?')"):
             # Add user message to history
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.session_state.messages.append({"role": "user", "content": user_query})
             with st.chat_message("user"):
-                st.markdown(prompt)
+                st.markdown(user_query)
 
-            # Prepare the AI Brain
+            # Generate AI Response
             try:
-                # We limit history to last 5 messages to keep it fast/cheap
-                history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-5:]])
+                # Include history context (last 5 messages)
+                chat_history = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state.messages[-5:]])
                 
-                context_prompt = f"""
-                You are the AI Club Treasurer Advisor. Use the following live data from Google Sheets to answer.
-                
-                DATA:
+                full_prompt = f"""
+                You are the AI Club Treasurer Assistant.
+                LATEST LEDGER DATA:
                 {df.to_string()}
                 
-                HISTORY:
-                {history}
-                
-                USER QUESTION:
-                {prompt}
+                CONVERSATION HISTORY:
+                {chat_history}
                 
                 INSTRUCTIONS:
-                1. Look for 'Approved Budget' vs 'Adjusted Budget'. 
-                2. If the user asks if they can afford something, check if the request is < the remaining balance.
-                3. Always mention the ASUO 10-day prior approval rule for new purchases.
-                4. Be conversational but concise.
+                - Use the data above to answer financial questions.
+                - If the user asks about affordability, calculate it based on the 'Approved' or 'Adjusted' budget columns.
+                - Mention the ASUO 10-day prior approval rule for new requests.
                 """
-
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                response = model.generate_content(context_prompt)
                 
-                # Add AI response to history
+                with st.spinner("AI is analyzing your ledger..."):
+                    response = model.generate_content(full_prompt)
+                    ai_text = response.text
+                
+                # Display assistant response
                 with st.chat_message("assistant"):
-                    st.markdown(response.text)
-                st.session_state.messages.append({"role": "assistant", "content": response.text})
+                    st.markdown(ai_text)
+                
+                # Add to history
+                st.session_state.messages.append({"role": "assistant", "content": ai_text})
 
             except Exception as e:
                 st.error(f"AI Error: {e}")
 
 else:
-    st.warning("🔒 Please enter your Password and Gemini API Key in the sidebar to access the treasury.")
+    st.warning("🔒 Please enter your Treasurer Password and Gemini API Key to begin.")
