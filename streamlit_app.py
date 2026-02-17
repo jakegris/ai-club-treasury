@@ -2,43 +2,48 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. Setup Page
 st.set_page_config(page_title="AI Club Treasury Assistant", layout="wide")
 st.title("💰 AI Club Treasury Decision Support")
 
-# 2. Secure Login (Simple version for you)
 password = st.sidebar.text_input("Enter Treasurer Password", type="password")
-if password == "AICLUBTREASURE": # Change this!
 
-    # 3. Setup AI (Gemini)
+if password == "AICLUBTREASURE":
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
+    
     if api_key:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-
-        # 4. Upload your Ledger (Excel or CSV)
-        uploaded_file = st.file_uploader("Upload your current Ledger (CSV or Excel)", type=['csv', 'xlsx'])
-        
-        if uploaded_file:
-            df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
-            st.write("### Current Ledger View", df.head())
-
-            # 5. Ask the AI for help
-            user_question = st.text_input("Ask a treasury question (e.g., 'Can we afford $200 for pizza?')")
+        try:
+            genai.configure(api_key=api_key)
             
-            if user_question:
-                # We give the AI the data from your sheet + your question
-                prompt = f"""
-                You are the AI Club Treasurer assistant at University of Oregon. 
-                Here is the current budget data: {df.to_string()}
+            # --- DEBUG SECTION: Let's see what models you actually have ---
+            st.sidebar.write("### Available Models for your Key:")
+            available_models = []
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    available_models.append(m.name.replace('models/', ''))
+            
+            # This creates a dropdown so you can pick the one that works!
+            selected_model = st.sidebar.selectbox("Select Model", available_models if available_models else ["gemini-1.5-flash"])
+            st.sidebar.info(f"Using: {selected_model}")
+            
+            model = genai.GenerativeModel(selected_model)
+            # -----------------------------------------------------------
+
+            uploaded_file = st.file_uploader("Upload Ledger (CSV or Excel)", type=['csv', 'xlsx'])
+            
+            if uploaded_file:
+                df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
+                st.write("### Current Ledger View", df.head())
+
+                user_question = st.text_input("Ask a treasury question:")
                 
-                ASUO Rules to remember:
-                - 10 day lead time for purchases.
-                - No tax should be paid (we are tax exempt).
-                
-                Question: {user_question}
-                """
-                response = model.generate_content(prompt)
-                st.info(f"**Assistant Recommendation:** {response.text}")
+                if user_question:
+                    prompt = f"Budget Data:\n{df.to_string()}\n\nQuestion: {user_question}"
+                    response = model.generate_content(prompt)
+                    st.info(f"**Assistant:** {response.text}")
+                    
+        except Exception as e:
+            st.error(f"Error: {e}")
+else:
+    st.warning("Please enter the password in the sidebar.")
 else:
     st.warning("Please enter the correct password in the sidebar to access treasury data.")
