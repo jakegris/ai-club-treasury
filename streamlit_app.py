@@ -2,66 +2,59 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 
-# 1. Page Configuration
-st.set_page_config(page_title="AI Club Treasury Assistant", layout="wide")
-st.title("💰 AI Club Treasury Assistant")
+st.set_page_config(page_title="UO AI Club Treasury", layout="wide")
+st.title("💰 Treasury Assistant")
 
-# 2. Sidebar Credentials
-password = st.sidebar.text_input("Enter Treasurer Password", type="password")
+# Sidebar for Setup
+with st.sidebar:
+    st.header("Setup")
+    password = st.text_input("Treasurer Password", type="password")
+    api_key = st.text_input("Gemini API Key", type="password")
 
-if password == "AICLUBTREASURE":
-    api_key = st.sidebar.text_input("Gemini API Key", type="password")
-
-    if api_key:
+if password == "AICLUBTREASURE" and api_key:
+    try:
+        genai.configure(api_key=api_key)
+        
+        # --- DYNAMIC MODEL DISCOVERY ---
+        # We ask the API: "What can I actually use right now?"
+        models = []
         try:
-            genai.configure(api_key=api_key)
-
-            # --- MODEL SELECTION ---
-            # We get the list from Google, but also add the most stable ones manually
-            try:
-                fetched_models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            except:
-                fetched_models = []
-            
-            # These are the stable ones we WANT to see
-            stable_options = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro"]
-            
-            # Combine them and remove duplicates
-            all_options = list(dict.fromkeys(stable_options + fetched_models))
-            
-            selected_model = st.sidebar.selectbox("Select Model (Choose 1.5-flash for stability)", all_options)
-            model = genai.GenerativeModel(selected_model)
-
-            # --- FILE UPLOADER ---
-            uploaded_file = st.file_uploader("Upload Ledger (CSV or Excel)", type=['csv', 'xlsx'])
-
-            if uploaded_file:
-                if uploaded_file.name.endswith('xlsx'):
-                    df = pd.read_excel(uploaded_file)
-                else:
-                    df = pd.read_csv(uploaded_file)
-
-                st.write("### Current Ledger View", df.head())
-
-                # --- CHAT INTERFACE ---
-                user_question = st.text_input("Ask a question about the budget:")
-                ask_button = st.button("Ask AI") # Button prevents accidental double-requests
-
-                if ask_button and user_question:
-                    # Provide simple instructions to the AI
-                    prompt = f"You are the Treasurer Assistant. Based on this data:\n{df.to_string()}\n\nQuestion: {user_question}"
-                    
-                    with st.spinner('AI is thinking...'):
-                        try:
-                            response = model.generate_content(prompt)
-                            st.info(f"**Assistant:** {response.text}")
-                        except Exception as chat_err:
-                            st.error(f"Quota error: Please wait 60 seconds. The Free Tier is currently busy. Error: {chat_err}")
-
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    models.append(m.name) # We keep the full 'models/...' name
         except Exception as e:
-            st.error(f"Error connecting to Google AI: {e}")
-    else:
-        st.info("Please enter your Gemini API Key in the sidebar.")
+            st.error(f"Could not list models. Is your API key correct? Error: {e}")
 
+        if models:
+            # We show the full names to be 100% sure we match Google's requirements
+            selected_model_name = st.selectbox("Select an Available Model:", models)
+            model = genai.GenerativeModel(selected_model_name)
+            
+            st.success(f"Connected to {selected_model_name}")
+            
+            # --- LEDGER UPLOAD ---
+            uploaded_file = st.file_uploader("Upload Ledger (Excel or CSV)", type=['xlsx', 'csv'])
+            
+            if uploaded_file:
+                df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
+                st.dataframe(df.head(5)) # Show a preview
+
+                # --- CHAT ---
+                query = st.text_input("Ask a question about the budget:")
+                if st.button("Query Ledger") and query:
+                    # Small helper to format the table for the AI
+                    table_context = df.to_string()
+                    prompt = f"Data:\n{table_context}\n\nQuestion: {query}"
+                    
+                    try:
+                        response = model.generate_content(prompt)
+                        st.info(f"**AI Response:**\n{response.text}")
+                    except Exception as e:
+                        st.error(f"The model failed to answer. Error: {e}")
+        else:
+            st.warning("No models found. Check if your API key is active in Google AI Studio.")
+
+    except Exception as e:
+        st.error(f"System Error: {e}")
 else:
-    st.warning("Please enter the correct Treasurer Password in the sidebar.")
+    st.info("Please enter your Password and API Key in the sidebar to begin.")
