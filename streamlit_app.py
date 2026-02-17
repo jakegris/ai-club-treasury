@@ -8,13 +8,13 @@ st.title("💰 AI Club Treasury Decision Support")
 
 # 2. Secure Login (Simple version for you)
 password = st.sidebar.text_input("Enter Treasurer Password", type="password")
-if password == "YourSecretPassword123": # Change this!
+if password == "AICLUBTREASURE": # Change this!
 
     # 3. Setup AI (Gemini)
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
     if api_key:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
         # 4. Upload your Ledger (Excel or CSV)
         uploaded_file = st.file_uploader("Upload your current Ledger (CSV or Excel)", type=['csv', 'xlsx'])
