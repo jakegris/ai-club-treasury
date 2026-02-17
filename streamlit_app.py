@@ -9,7 +9,7 @@ st.title("💰 AI Club Treasury Assistant")
 # 2. Sidebar Credentials
 password = st.sidebar.text_input("Enter Treasurer Password", type="password")
 
-if password == "YourSecretPassword123":
+if password == "AICLUBTREASURE":
     api_key = st.sidebar.text_input("Gemini API Key", type="password")
 
     if api_key:
