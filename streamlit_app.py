@@ -7,8 +7,8 @@ import glob
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# --- 1. OREGON BRANDED THEME & UI ---
-st.set_page_config(page_title="AI Club Treasury Hub", layout="wide", page_icon="🦆")
+# --- 1. OREGON BRANDED THEME & PREMIUM UI ---
+st.set_page_config(page_title="UO AI Club Treasury Hub", layout="wide", page_icon="🦆")
 
 st.markdown("""
     <style>
@@ -25,12 +25,13 @@ st.markdown("""
         border-right: 2px solid #fee123;
     }
 
-    /* Metric Cards */
+    /* Metric Cards: Glassmorphism */
     div[data-testid="stMetric"] {
         background: rgba(255, 255, 255, 0.05);
         border-left: 5px solid #fee123;
         padding: 20px;
         border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     }
     
     /* Buttons: UO Yellow */
@@ -41,6 +42,11 @@ st.markdown("""
         font-weight: 800;
         text-transform: uppercase;
         width: 100%;
+        transition: 0.3s all;
+    }
+    .stButton>button:hover {
+        background-color: #ffffff !important;
+        box-shadow: 0 0 20px #fee123;
     }
 
     /* Chat Bubbles */
@@ -48,15 +54,16 @@ st.markdown("""
         background: rgba(255, 255, 255, 0.04) !important;
         border: 1px solid rgba(254, 225, 35, 0.2) !important;
         border-radius: 15px !important;
-        padding: 15px;
     }
-    
-    /* Style for AI Tables */
-    table { color: white !important; background-color: rgba(255,255,255,0.1); }
+
+    /* Markdown Table Styling */
+    table { width: 100%; color: white !important; border-collapse: collapse; }
+    th { background-color: rgba(254, 225, 35, 0.2); }
+    td, th { border: 1px solid rgba(255,255,255,0.1); padding: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATA LOADERS ---
+# --- 2. DATA SOURCE CONFIG ---
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
 LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1"
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Spring+Term+FP%26A"
@@ -82,85 +89,98 @@ def load_permanent_knowledge():
         except: pass
     return combined_text, files
 
-# --- 3. AUTHENTICATION & SIDEBAR ---
+# --- 3. AUTH & SIDEBAR ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
-    st.markdown("<h2 style='text-align: center; color: #fee123;'>Treasurer Portal</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #fee123;'>Treasurer Hub</h2>", unsafe_allow_html=True)
     
-    access_code = st.text_input("Enter Access Code", type="password")
+    access_code = st.text_input("Access Code", type="password")
     
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
-        st.error("API Key missing in Streamlit Secrets!")
+        st.error("API Key missing in Secrets Vault!")
         st.stop()
 
     st.markdown("---")
-    if st.button("🗑️ Reset Chat"):
+    session_files = st.file_uploader("📂 Session Docs", type="pdf", accept_multiple_files=True)
+    
+    if st.button("Reset Chat"):
         st.session_state.messages = []
         st.rerun()
 
-# --- 4. MAIN HUB ---
+# --- 4. MAIN APP LOGIC ---
 if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Load All Data
+    # Background Data Sync
     df_ledger = load_sheet_data(LEDGER_URL)
     df_plan = load_sheet_data(PLANNING_URL)
     kb_text, kb_files = load_permanent_knowledge()
+    
+    session_text = ""
+    if session_files:
+        for f in session_files:
+            reader = PdfReader(f)
+            for page in reader.pages: session_text += page.extract_text() + "\n"
 
+    # MAIN HEADER
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; opacity: 0.7;'>Strategic Financial Advisor | University of Oregon</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; opacity: 0.8;'>University of Oregon AI Club | Strategic Advisor</p>", unsafe_allow_html=True)
 
-    # METRICS
+    # TOP METRICS
     m1, m2, m3, m4 = st.columns(4)
-    with m1: st.metric("LEDGER", "SYNCED", "LIVE")
-    with m2: st.metric("SPRING PLAN", "ACTIVE", "FP&A")
+    with m1: st.metric("LEDGER", "SYNCED 🟢")
+    with m2: st.metric("FP&A PLAN", "ACTIVE 🟢")
     with m3: st.metric("KNOWLEDGE", len(kb_files), "DOCS")
-    with m4: st.metric("AUTH", "VERIFIED")
+    with m4: st.metric("STATUS", "SECURE")
 
-    tab1, tab2, tab3 = st.tabs(["💬 Strategy Chat", "📅 Deadlines & FP&A", "🏛️ Repository"])
+    tab1, tab2, tab3 = st.tabs(["💬 Strategic Chat", "📅 Planning & Deadlines", "🏛️ Repository"])
 
-    # --- TAB 1: EXECUTIVE CHAT ---
+    # --- TAB 1: STRATEGIC CHAT ---
     with tab1:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("Ask a strategic question..."):
+        if query := st.chat_input("How can I help you grow the club today?"):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
             try:
-                # Find available model
+                # Select best model
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                # --- THE STRICT SYSTEM PROMPT (Fixes jumbled words/length) ---
+                # --- ENHANCED STRATEGIC TREASURER PROMPT ---
                 system_prompt = f"""
-                ROLE: You are the Executive Treasurer Advisor for the UO AI Club.
-                PERSONALITY: Professional, concise, and strategic.
-                
-                STRICT FORMATTING RULES:
-                1. Use **Bold Headers** for different sections.
-                2. Use Bullet Points for lists.
-                3. If providing numbers, use a Markdown Table.
-                4. NEVER merge numbers into text sentences (e.g., instead of "We have $200 for pizza", use "Pizza Budget: $200").
-                5. LIMIT: Keep responses under 250 words.
-                6. FOCUS: Only answer the specific question asked. Do not list unrelated budget items.
+                ROLE: You are the Strategic Executive Treasurer for the UO AI Club.
+                MISSION: Provide advice that anchors member growth and attendance goals in ACTUAL financial data.
 
-                CONTEXT:
+                STRICT STRUCTURE:
+                1. **Strategic Goal**: Direct answer to the user's question.
+                2. **Financial Analysis**: A Markdown Table showing relevant Budget Items, Available Funds, and Proposed Costs based on the LEDGER.
+                3. **Treasurer's Advice**: Assess if the move is 'Low Risk' or 'High Risk' based on the surplus/deficit.
+                4. **ASUO Compliance**: Point out a specific deadline from the SPRING PLAN (FP&A) or a Rule from the HANDBOOK.
+
+                STRICT FORMATTING:
+                - Use Bold Headers.
+                - NEVER merge numbers into text (e.g., "$200Available"). Always use clear spacing.
+                - Limit total response to 250 words.
+                - Use 'Oregon Ducks' terminology when appropriate.
+
+                DATA CONTEXT:
                 - LEDGER: {df_ledger.to_string() if df_ledger is not None else "Empty"}
                 - SPRING PLAN: {df_plan.to_string() if df_plan is not None else "Empty"}
-                - RULES: {kb_text[:5000]}
+                - RULES: {kb_text[:10000]}
                 """
                 
-                with st.spinner("Analyzing..."):
+                with st.spinner("Consulting Ledger & ASUO Policies..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
-                    ai_text = response.text
+                    ai_resp = response.text
                 
-                with st.chat_message("assistant"): st.markdown(ai_text)
-                st.session_state.messages.append({"role": "assistant", "content": ai_text})
+                with st.chat_message("assistant"): st.markdown(ai_resp)
+                st.session_state.messages.append({"role": "assistant", "content": ai_resp})
             except Exception as e:
                 st.error(f"System Error: {e}")
 
@@ -168,34 +188,42 @@ if access_code == "AICLUBTREASURE":
     with tab2:
         col_left, col_right = st.columns([2, 1])
         with col_left:
-            st.subheader("🗓️ Spring Term FP&A Sheet")
+            st.subheader("🗓️ Spring Term FP&A Tracker")
             st.dataframe(df_plan, use_container_width=True)
-        
+            if df_plan is not None:
+                num_cols = df_plan.select_dtypes(include=['number']).columns
+                if len(num_cols) > 0:
+                    fig = px.bar(df_plan, x=df_plan.columns[0], y=num_cols[0], template="plotly_dark", color_discrete_sequence=['#fee123'])
+                    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig, use_container_width=True)
+
         with col_right:
-            st.subheader("🚨 Priority Deadlines")
+            st.subheader("🚨 ASUO Priority Alarms")
             if df_plan is not None and 'Date' in df_plan.columns:
                 try:
                     for _, row in df_plan.iterrows():
                         ev_date = pd.to_datetime(row['Date'])
                         deadline = ev_date - timedelta(days=14)
                         days_left = (deadline - datetime.now()).days
-                        if days_left < 10:
-                            st.error(f"**{row['Event']}**\nSubmit RTP by: {deadline.date()} ({days_left} days left!)")
+                        if days_left < 10 and days_left > 0:
+                            st.warning(f"**{row['Event']}**\nSubmit RTP by: {deadline.date()} ({days_left} days left!)")
+                        elif days_left <= 0:
+                            st.error(f"**{row['Event']}**\nDEADLINE PASSED on {deadline.date()}")
                         else:
                             st.success(f"**{row['Event']}**\nDeadline: {deadline.date()}")
-                except: st.info("Ensure FP&A sheet has 'Date' and 'Event' columns.")
+                except: st.info("Add 'Date' and 'Event' columns to FP&A sheet to activate Alarms.")
 
-    # --- TAB 3: KNOWLEDGE BASE ---
+    # --- TAB 3: REPOSITORY ---
     with tab3:
-        st.subheader("🏛️ Permanent Knowledge Repository")
+        st.subheader("🏛️ Knowledge Base Documents")
         if kb_files:
             for f in kb_files: st.write(f"✅ **{os.path.basename(f)}**")
         else:
-            st.warning("No documents found in GitHub 'knowledge_base' folder.")
+            st.info("No documents found in GitHub 'knowledge_base'.")
 
 else:
     col1, col2, col3 = st.columns([1,2,1])
     with col2:
         st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=150)
-        st.markdown("<h2 style='text-align: center; color: #fee123;'>TREASURY AUTHENTICATION</h2>", unsafe_allow_html=True)
-        st.info("Please enter the Access Code in the sidebar to enter the Treasury Hub.")
+        st.markdown("<h2 style='text-align: center; color: #fee123;'>AUTHENTICATION REQUIRED</h2>", unsafe_allow_html=True)
+        st.info("Enter the Treasurer Access Code in the sidebar.")
