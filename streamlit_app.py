@@ -2,154 +2,184 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from PyPDF2 import PdfReader
-import trafilatura
+import os
+import glob
 import plotly.express as px
 
-# --- 1. PAGE CONFIG & MODERN THEMING ---
+# --- 1. OREGON BRANDED THEME ---
 st.set_page_config(page_title="AI Club Treasury Hub", layout="wide", page_icon="🦆")
 
-# Custom CSS for the "Cool" FinTech Look
 st.markdown("""
     <style>
-    /* Main App Background */
+    /* Main Background: Oregon Green Gradient */
     .stApp {
-        background: linear-gradient(135deg, #0a0c10 0%, #1a1d23 100%);
-        color: #e0e0e0;
+        background: linear-gradient(135deg, #124734 0%, #072219 100%);
+        color: #f0f0f0;
     }
     
-    /* Glassmorphism Sidebar */
+    /* Sidebar: Frosted Glass Look */
     [data-testid="stSidebar"] {
-        background-color: rgba(22, 27, 34, 0.7) !important;
-        backdrop-filter: blur(10px);
-        border-right: 1px solid rgba(255, 255, 255, 0.1);
+        background-color: rgba(10, 40, 30, 0.8) !important;
+        backdrop-filter: blur(12px);
+        border-right: 2px solid #fee123;
     }
 
-    /* Metric Card Styling */
+    /* Metric Cards: Premium FinTech Look */
     div[data-testid="stMetric"] {
         background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-left: 5px solid #fee123;
         padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        border-radius: 10px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     }
     
-    /* Duck Green Accents */
+    /* Buttons: Fighting Ducks Yellow */
     .stButton>button {
-        background-color: #124734 !important; /* UO Green */
-        color: #fee123 !important; /* UO Yellow */
-        border-radius: 8px;
+        background-color: #fee123 !important;
+        color: #124734 !important;
+        border-radius: 12px;
         border: none;
-        font-weight: bold;
-        transition: 0.3s;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        width: 100%;
+        transition: 0.3s all;
     }
     .stButton>button:hover {
-        transform: scale(1.05);
-        box-shadow: 0 0 15px #fee123;
+        background-color: #ffffff !important;
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(254, 225, 35, 0.4);
     }
 
-    /* Chat Bubble Styling */
-    .stChatMessage {
-        background: rgba(255, 255, 255, 0.03) !important;
-        border-radius: 20px !important;
-        border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        margin-bottom: 10px;
+    /* Chat Bubbles: Custom UO Colors */
+    [data-testid="stChatMessage"] {
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(254, 225, 35, 0.2) !important;
+        border-radius: 15px !important;
     }
     
-    /* Hide Streamlit Branding */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
+    /* Tab Headers */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 20px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: transparent !important;
+        border-radius: 4px 4px 0px 0px;
+        color: white;
+        font-weight: bold;
+    }
+    .stTabs [aria-selected="true"] {
+        border-bottom: 3px solid #fee123 !important;
+        color: #fee123 !important;
+    }
+
+    /* Input Box */
+    .stChatInputContainer {
+        padding-bottom: 20px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. DATA SOURCE CONFIG ---
+# --- 2. DATA LOADERS ---
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
-GSHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1"
 
-# --- 3. FUNCTIONS ---
-def get_pdf_text(pdf_docs):
-    text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text() or ""
-    return text
+def load_permanent_knowledge():
+    combined_text = ""
+    kb_path = "knowledge_base"
+    if not os.path.exists(kb_path):
+        return "", [], f"Knowledge folder not found."
+    files = os.listdir(kb_path)
+    knowledge_files = [os.path.join(kb_path, f) for f in files if f.lower().endswith(('.pdf', '.txt'))]
+    for file_path in knowledge_files:
+        try:
+            if file_path.lower().endswith(".pdf"):
+                reader = PdfReader(file_path)
+                for page in reader.pages:
+                    text = page.extract_text()
+                    if text: combined_text += text + "\n"
+            elif file_path.lower().endswith(".txt"):
+                with open(file_path, "r", encoding="utf-8") as f:
+                    combined_text += f.read() + "\n"
+        except Exception as e:
+            st.error(f"Error reading {file_path}: {e}")
+    return combined_text, knowledge_files, "Success"
 
-def get_web_text(url):
+@st.cache_data(ttl=60)
+def load_sheet_data(url):
     try:
-        downloaded = trafilatura.fetch_url(url)
-        return trafilatura.extract(downloaded) or ""
-    except:
-        return ""
+        df = pd.read_csv(url)
+        return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+    except: return None
 
-# --- 4. SIDEBAR ADMIN PANEL ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=80)
-    st.title("Admin Portal")
-    password = st.text_input("Treasurer Code", type="password")
+    # Oregon Logo
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
+    st.markdown("<h2 style='text-align: center; color: #fee123;'>Treasurer Admin</h2>", unsafe_allow_html=True)
+    
+    password = st.text_input("Access Code", type="password")
     api_key = st.text_input("Gemini API Key", type="password")
     
     st.markdown("---")
-    st.subheader("📁 Brain Uploads")
-    uploaded_docs = st.file_uploader("Policy PDFs", type="pdf", accept_multiple_files=True)
-    website_url = st.text_input("Study URL", placeholder="https://...")
+    session_files = st.file_uploader("📂 Temporary Docs", type="pdf", accept_multiple_files=True)
     
-    if st.button("Clear Memory"):
+    if st.button("Reset Session"):
         st.session_state.messages = []
         st.rerun()
 
-# --- 5. APP LOGIC ---
+# --- 4. APP INTERFACE ---
 if password == "AICLUBTREASURE" and api_key:
     genai.configure(api_key=api_key)
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Fetch Data
-    try:
-        df = pd.read_csv(GSHEET_URL)
-        df = df.dropna(how='all', axis=0).dropna(how='all', axis=1)
-    except:
-        df = None
-
-    # UI HEADER
-    st.markdown("<h1 style='text-align: center; color: #fee123;'>🦆 AI Club Treasury Hub</h1>", unsafe_allow_html=True)
+    # Background Processing
+    df_ledger = load_sheet_data(LEDGER_URL)
+    perm_text, perm_files, debug_msg = load_permanent_knowledge()
     
-    # BIG METRICS ROW
+    session_text = ""
+    if session_files:
+        for f in session_files:
+            reader = PdfReader(f)
+            for page in reader.pages:
+                session_text += page.extract_text() + "\n"
+
+    # MAIN HEADER
+    st.markdown("<h1 style='text-align: center; color: #fee123; font-size: 3rem; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #ffffff; opacity: 0.8;'>University of Oregon AI Club Financial Hub</p>", unsafe_allow_html=True)
+
+    # METRICS ROW
     m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Ledger Status", "LIVE 🟢")
-    with m2:
-        st.metric("Total Line Items", len(df) if df is not None else 0)
-    with m3:
-        st.metric("Knowledge Base", "Active" if uploaded_docs or website_url else "Empty")
-    with m4:
-        st.metric("Role", "Treasurer")
+    with m1: st.metric("LEDGER", "SYNCED", "LIVE")
+    with m2: st.metric("ENTRIES", len(df_ledger) if df_ledger is not None else 0)
+    with m3: st.metric("KNOWLEDGE", len(perm_files), "FILES")
+    with m4: st.metric("STATUS", "SECURE", "AUTH")
 
-    # TABS FOR COOLER NAVIGATION
-    tab1, tab2, tab3 = st.tabs(["💬 Advisor Chat", "📊 Analytics & Ledger", "🧠 Knowledge Base"])
+    tab1, tab2, tab3 = st.tabs(["💬 Financial Chat", "📊 Budget Analytics", "🧠 Knowledge Base"])
 
     # --- TAB 1: CHAT ---
     with tab1:
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
+        # Custom scrolling chat window
+        chat_container = st.container()
+        with chat_container:
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
 
-        if query := st.chat_input("Ask anything..."):
+        if query := st.chat_input("How can I help you today, Treasurer?"):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(query)
 
-            # Knowledge processing
-            kb_text = get_pdf_text(uploaded_docs) if uploaded_docs else ""
-            if website_url: kb_text += f"\nWeb Info: {get_web_text(website_url)}"
-
-            # AI Processing
             try:
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                context = f"LEDGER:\n{df.to_string()}\n\nRULES:\n{kb_text[:10000]}"
-                full_prompt = f"System: You are the UO AI Club Treasurer Bot. {context}\nUser: {query}"
+                # Combine Ledger + KB + Session Docs
+                combined_kb = f"PERMANENT:\n{perm_text}\n\nTEMPORARY:\n{session_text}"
+                context = f"LEDGER:\n{df_ledger.to_string()}\n\nRULES:\n{combined_kb[:25000]}"
+                full_prompt = f"System: You are the UO AI Club Treasurer Advisor. Use the UO Duck brand voice (helpful, focused, and professional). {context}\nUser: {query}"
                 
                 with st.spinner("Analyzing..."):
                     response = model.generate_content(full_prompt)
@@ -159,35 +189,51 @@ if password == "AICLUBTREASURE" and api_key:
                     st.markdown(ai_resp)
                 st.session_state.messages.append({"role": "assistant", "content": ai_resp})
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"AI System Error: {e}")
 
-    # --- TAB 2: LEDGER ---
+    # --- TAB 2: ANALYTICS ---
     with tab2:
-        st.subheader("Current Spreadsheet Data")
-        st.dataframe(df, use_container_width=True, height=400)
+        st.subheader("Interactive Budget Overview")
+        st.dataframe(df_ledger, use_container_width=True)
         
-        # Add a quick visual if numbers exist
-        if df is not None:
-            try:
-                # This tries to find a column with numbers to graph
-                num_cols = df.select_dtypes(include=['number']).columns
-                if len(num_cols) > 0:
-                    st.subheader("Quick Spending Chart")
-                    fig = px.bar(df, x=df.columns[1], y=num_cols[0], template="plotly_dark", color_discrete_sequence=['#fee123'])
-                    st.plotly_chart(fig, use_container_width=True)
-            except:
-                st.info("No chartable data found. Add numerical columns to see graphs!")
+        if df_ledger is not None:
+            num_cols = df_ledger.select_dtypes(include=['number']).columns
+            if len(num_cols) > 0:
+                # Custom Oregon Chart
+                fig = px.bar(
+                    df_ledger, 
+                    x=df_ledger.columns[0], 
+                    y=num_cols[0], 
+                    template="plotly_dark", 
+                    color_discrete_sequence=['#fee123'],
+                    title="Spending by Category"
+                )
+                fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig, use_container_width=True)
 
-    # --- TAB 3: BRAIN ---
+    # --- TAB 3: KNOWLEDGE ---
     with tab3:
-        st.subheader("Studied Documents")
-        if uploaded_docs:
-            for d in uploaded_docs:
-                st.write(f"✅ PDF Loaded: {d.name}")
-        if website_url:
-            st.write(f"✅ Website Studied: {website_url}")
-        if not (uploaded_docs or website_url):
-            st.write("No external knowledge added yet. Use the sidebar to upload PDFs or URLs.")
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.markdown("### 🏛️ Permanent Repository")
+            if perm_files:
+                for f in perm_files:
+                    st.write(f"✅ **{os.path.basename(f)}**")
+            else:
+                st.info("No files found in GitHub 'knowledge_base'.")
+        
+        with col_right:
+            st.markdown("### 📝 Session Documents")
+            if session_files:
+                for f in session_files:
+                    st.write(f"📄 {f.name}")
+            else:
+                st.write("No temporary files uploaded.")
 
 else:
-    st.warning("🔒 Please authenticate in the sidebar with your Treasurer Code.")
+    # Centered Login Box for better UI
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=150)
+        st.markdown("<h2 style='text-align: center; color: #fee123;'>TREASURY AUTHENTICATION</h2>", unsafe_allow_html=True)
+        st.info("Please enter credentials in the sidebar to enter the hub.")
