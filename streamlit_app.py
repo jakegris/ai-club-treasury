@@ -7,7 +7,7 @@ import glob
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# --- 1. OREGON BRANDED THEME & PREMIUM UI ---
+# --- 1. OREGON BRANDED THEME & UI ---
 st.set_page_config(page_title="UO AI Club Treasury Hub", layout="wide", page_icon="🦆")
 
 st.markdown("""
@@ -25,7 +25,7 @@ st.markdown("""
         border-right: 2px solid #fee123;
     }
 
-    /* Metric Cards: Glassmorphism */
+    /* Metric Cards */
     div[data-testid="stMetric"] {
         background: rgba(255, 255, 255, 0.05);
         border-left: 5px solid #fee123;
@@ -65,15 +65,18 @@ st.markdown("""
 
 # --- 2. DATA SOURCE CONFIG ---
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
+# URLs for the specific tabs
 LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1"
-PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Spring+Term+FP%26A"
+PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Spring+term+FP%26A"
 
 @st.cache_data(ttl=60)
-def load_sheet_data(url):
+def load_sheet_data(url, skip=0):
     try:
-        df = pd.read_csv(url)
+        # Based on your screenshot, the planning tab needs skiprows=3
+        df = pd.read_csv(url, skiprows=skip)
         return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
-    except: return None
+    except Exception as e:
+        return None
 
 def load_permanent_knowledge():
     combined_text = ""
@@ -83,9 +86,10 @@ def load_permanent_knowledge():
     for f_path in files:
         try:
             if f_path.endswith(".pdf"):
-                reader = PdfReader(f_path); combined_text += "\n".join([p.extract_text() for p in reader.pages])
+                reader = PdfReader(f_path)
+                combined_text += "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
             else:
-                with open(f_path, "r") as f: combined_text += f.read()
+                with open(f_path, "r", encoding="utf-8") as f: combined_text += f.read()
         except: pass
     return combined_text, files
 
@@ -109,32 +113,31 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-# --- 4. MAIN APP LOGIC ---
+# --- 4. MAIN HUB ---
 if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Background Data Sync
-    df_ledger = load_sheet_data(LEDGER_URL)
-    df_plan = load_sheet_data(PLANNING_URL)
+    # Load Data (Ledger uses Row 1, Planning uses Row 4)
+    df_ledger = load_sheet_data(LEDGER_URL, skip=0)
+    df_plan = load_sheet_data(PLANNING_URL, skip=3)
     kb_text, kb_files = load_permanent_knowledge()
     
     session_text = ""
     if session_files:
         for f in session_files:
             reader = PdfReader(f)
-            for page in reader.pages: session_text += page.extract_text() + "\n"
+            for page in reader.pages: session_text += (page.extract_text() or "") + "\n"
 
-    # MAIN HEADER
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; opacity: 0.8;'>University of Oregon AI Club | Strategic Advisor</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; opacity: 0.8;'>Strategic Financial Advisor | University of Oregon</p>", unsafe_allow_html=True)
 
-    # TOP METRICS
+    # METRICS
     m1, m2, m3, m4 = st.columns(4)
     with m1: st.metric("LEDGER", "SYNCED 🟢")
     with m2: st.metric("FP&A PLAN", "ACTIVE 🟢")
     with m3: st.metric("KNOWLEDGE", len(kb_files), "DOCS")
-    with m4: st.metric("STATUS", "SECURE")
+    with m4: st.metric("STATUS", "AUTH VERIFIED")
 
     tab1, tab2, tab3 = st.tabs(["💬 Strategic Chat", "📅 Planning & Deadlines", "🏛️ Repository"])
 
@@ -148,34 +151,26 @@ if access_code == "AICLUBTREASURE":
             with st.chat_message("user"): st.markdown(query)
 
             try:
-                # Select best model
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                # --- ENHANCED STRATEGIC TREASURER PROMPT ---
                 system_prompt = f"""
                 ROLE: You are the Strategic Executive Treasurer for the UO AI Club.
-                MISSION: Provide advice that anchors member growth and attendance goals in ACTUAL financial data.
+                MISSION: Provide advice anchored in ACTUAL financial data.
 
                 STRICT STRUCTURE:
-                1. **Strategic Goal**: Direct answer to the user's question.
-                2. **Financial Analysis**: A Markdown Table showing relevant Budget Items, Available Funds, and Proposed Costs based on the LEDGER.
-                3. **Treasurer's Advice**: Assess if the move is 'Low Risk' or 'High Risk' based on the surplus/deficit.
-                4. **ASUO Compliance**: Point out a specific deadline from the SPRING PLAN (FP&A) or a Rule from the HANDBOOK.
+                1. **Strategic Goal**: Direct answer to the question.
+                2. **Financial Analysis**: Markdown Table showing Budget Items, Available Funds, and Costs.
+                3. **Treasurer's Advice**: Risk assessment (Low/High).
+                4. **ASUO Compliance**: Highlight a deadline from FP&A or a Handbook rule.
 
-                STRICT FORMATTING:
-                - Use Bold Headers.
-                - NEVER merge numbers into text (e.g., "$200Available"). Always use clear spacing.
-                - Limit total response to 250 words.
-                - Use 'Oregon Ducks' terminology when appropriate.
-
-                DATA CONTEXT:
+                CONTEXT:
                 - LEDGER: {df_ledger.to_string() if df_ledger is not None else "Empty"}
                 - SPRING PLAN: {df_plan.to_string() if df_plan is not None else "Empty"}
                 - RULES: {kb_text[:10000]}
                 """
                 
-                with st.spinner("Consulting Ledger & ASUO Policies..."):
+                with st.spinner("Analyzing Ledger & ASUO Policies..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
@@ -193,25 +188,27 @@ if access_code == "AICLUBTREASURE":
             if df_plan is not None:
                 num_cols = df_plan.select_dtypes(include=['number']).columns
                 if len(num_cols) > 0:
-                    fig = px.bar(df_plan, x=df_plan.columns[0], y=num_cols[0], template="plotly_dark", color_discrete_sequence=['#fee123'])
+                    fig = px.bar(df_plan, x='Event', y=num_cols[0], template="plotly_dark", color_discrete_sequence=['#fee123'])
                     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
 
         with col_right:
             st.subheader("🚨 ASUO Priority Alarms")
-            if df_plan is not None and 'Date' in df_plan.columns:
+            if df_plan is not None:
                 try:
+                    # Logic specifically for your column names from the screenshot
                     for _, row in df_plan.iterrows():
-                        ev_date = pd.to_datetime(row['Date'])
-                        deadline = ev_date - timedelta(days=14)
-                        days_left = (deadline - datetime.now()).days
-                        if days_left < 10 and days_left > 0:
-                            st.warning(f"**{row['Event']}**\nSubmit RTP by: {deadline.date()} ({days_left} days left!)")
-                        elif days_left <= 0:
-                            st.error(f"**{row['Event']}**\nDEADLINE PASSED on {deadline.date()}")
+                        po_date = pd.to_datetime(row['Long Form PO due date'])
+                        days_to_po = (po_date - datetime.now()).days
+                        
+                        if days_to_po < 7 and days_to_po >= 0:
+                            st.warning(f"**{row['Event']}**\nPO DUE SOON: {po_date.date()} ({days_to_po} days!)")
+                        elif days_to_po < 0:
+                            st.error(f"**{row['Event']}**\nPO OVERDUE: {po_date.date()}")
                         else:
-                            st.success(f"**{row['Event']}**\nDeadline: {deadline.date()}")
-                except: st.info("Add 'Date' and 'Event' columns to FP&A sheet to activate Alarms.")
+                            st.success(f"**{row['Event']}**\nPO Due: {po_date.date()}")
+                except Exception as e: 
+                    st.info("Check column names in FP&A sheet to activate auto-alarms.")
 
     # --- TAB 3: REPOSITORY ---
     with tab3:
@@ -219,7 +216,7 @@ if access_code == "AICLUBTREASURE":
         if kb_files:
             for f in kb_files: st.write(f"✅ **{os.path.basename(f)}**")
         else:
-            st.info("No documents found in GitHub 'knowledge_base'.")
+            st.info("No documents found in GitHub 'knowledge_base' folder.")
 
 else:
     col1, col2, col3 = st.columns([1,2,1])
