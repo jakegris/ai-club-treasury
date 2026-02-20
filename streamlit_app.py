@@ -12,29 +12,21 @@ st.set_page_config(page_title="UO AI Club Treasury Hub", layout="wide", page_ico
 
 st.markdown("""
     <style>
-    /* Main Background: Oregon Green Gradient */
     .stApp {
         background: linear-gradient(135deg, #124734 0%, #072219 100%);
         color: #f0f0f0;
     }
-    
-    /* Sidebar: Frosted Glass */
     [data-testid="stSidebar"] {
         background-color: rgba(10, 40, 30, 0.8) !important;
         backdrop-filter: blur(12px);
         border-right: 2px solid #fee123;
     }
-
-    /* Metric Cards */
     div[data-testid="stMetric"] {
         background: rgba(255, 255, 255, 0.05);
         border-left: 5px solid #fee123;
         padding: 20px;
         border-radius: 10px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.4);
     }
-    
-    /* Buttons: UO Yellow */
     .stButton>button {
         background-color: #fee123 !important;
         color: #124734 !important;
@@ -42,21 +34,12 @@ st.markdown("""
         font-weight: 800;
         text-transform: uppercase;
         width: 100%;
-        transition: 0.3s all;
     }
-    .stButton>button:hover {
-        background-color: #ffffff !important;
-        box-shadow: 0 0 20px #fee123;
-    }
-
-    /* Chat Bubbles */
     [data-testid="stChatMessage"] {
         background: rgba(255, 255, 255, 0.04) !important;
         border: 1px solid rgba(254, 225, 35, 0.2) !important;
         border-radius: 15px !important;
     }
-
-    /* Markdown Table Styling */
     table { width: 100%; color: white !important; border-collapse: collapse; }
     th { background-color: rgba(254, 225, 35, 0.2); }
     td, th { border: 1px solid rgba(255,255,255,0.1); padding: 8px; }
@@ -65,15 +48,16 @@ st.markdown("""
 
 # --- 2. DATA SOURCE CONFIG ---
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
-# URLs for the specific tabs
 LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1"
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Spring+term+FP%26A"
 
 @st.cache_data(ttl=60)
 def load_sheet_data(url, skip=0):
     try:
-        # Based on your screenshot, the planning tab needs skiprows=3
+        # Load data and immediately strip whitespace from headers
         df = pd.read_csv(url, skiprows=skip)
+        df.columns = [str(col).strip() for col in df.columns]
+        # Remove empty rows/columns
         return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
     except Exception as e:
         return None
@@ -97,28 +81,26 @@ def load_permanent_knowledge():
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
     st.markdown("<h2 style='text-align: center; color: #fee123;'>Treasurer Hub</h2>", unsafe_allow_html=True)
-    
     access_code = st.text_input("Access Code", type="password")
     
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
-        st.error("API Key missing in Secrets Vault!")
+        st.error("API Key missing in Secrets!")
         st.stop()
 
     st.markdown("---")
     session_files = st.file_uploader("📂 Session Docs", type="pdf", accept_multiple_files=True)
-    
     if st.button("Reset Chat"):
         st.session_state.messages = []
         st.rerun()
 
-# --- 4. MAIN HUB ---
+# --- 4. MAIN APP ---
 if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Load Data (Ledger uses Row 1, Planning uses Row 4)
+    # Load Data with Skip logic based on your Sheet Screenshots
     df_ledger = load_sheet_data(LEDGER_URL, skip=0)
     df_plan = load_sheet_data(PLANNING_URL, skip=3)
     kb_text, kb_files = load_permanent_knowledge()
@@ -132,7 +114,7 @@ if access_code == "AICLUBTREASURE":
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; opacity: 0.8;'>Strategic Financial Advisor | University of Oregon</p>", unsafe_allow_html=True)
 
-    # METRICS
+    # TOP METRICS
     m1, m2, m3, m4 = st.columns(4)
     with m1: st.metric("LEDGER", "SYNCED 🟢")
     with m2: st.metric("FP&A PLAN", "ACTIVE 🟢")
@@ -141,12 +123,11 @@ if access_code == "AICLUBTREASURE":
 
     tab1, tab2, tab3 = st.tabs(["💬 Strategic Chat", "📅 Planning & Deadlines", "🏛️ Repository"])
 
-    # --- TAB 1: STRATEGIC CHAT ---
     with tab1:
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("How can I help you grow the club today?"):
+        if query := st.chat_input("How can I help you today?"):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
@@ -155,14 +136,8 @@ if access_code == "AICLUBTREASURE":
                 model = genai.GenerativeModel(available_models[0])
                 
                 system_prompt = f"""
-                ROLE: You are the Strategic Executive Treasurer for the UO AI Club.
-                MISSION: Provide advice anchored in ACTUAL financial data.
-
-                STRICT STRUCTURE:
-                1. **Strategic Goal**: Direct answer to the question.
-                2. **Financial Analysis**: Markdown Table showing Budget Items, Available Funds, and Costs.
-                3. **Treasurer's Advice**: Risk assessment (Low/High).
-                4. **ASUO Compliance**: Highlight a deadline from FP&A or a Handbook rule.
+                ROLE: Strategic Executive Treasurer for UO AI Club.
+                MISSION: Provide growth advice anchored in ACTUAL financial data.
 
                 CONTEXT:
                 - LEDGER: {df_ledger.to_string() if df_ledger is not None else "Empty"}
@@ -170,7 +145,7 @@ if access_code == "AICLUBTREASURE":
                 - RULES: {kb_text[:10000]}
                 """
                 
-                with st.spinner("Analyzing Ledger & ASUO Policies..."):
+                with st.spinner("Analyzing Ledger..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
@@ -179,40 +154,43 @@ if access_code == "AICLUBTREASURE":
             except Exception as e:
                 st.error(f"System Error: {e}")
 
-    # --- TAB 2: PLANNING & DEADLINES ---
     with tab2:
         col_left, col_right = st.columns([2, 1])
         with col_left:
             st.subheader("🗓️ Spring Term FP&A Tracker")
-            st.dataframe(df_plan, use_container_width=True)
             if df_plan is not None:
+                st.dataframe(df_plan, use_container_width=True)
+                # Robust Chart Logic
                 num_cols = df_plan.select_dtypes(include=['number']).columns
-                if len(num_cols) > 0:
+                if 'Event' in df_plan.columns and len(num_cols) > 0:
                     fig = px.bar(df_plan, x='Event', y=num_cols[0], template="plotly_dark", color_discrete_sequence=['#fee123'])
                     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Chart will appear once 'Event' column and numeric data are populated.")
+            else:
+                st.error("Could not load FP&A tab. Check sheet name.")
 
         with col_right:
             st.subheader("🚨 ASUO Priority Alarms")
             if df_plan is not None:
                 try:
-                    # Logic specifically for your column names from the screenshot
                     for _, row in df_plan.iterrows():
-                        po_date = pd.to_datetime(row['Long Form PO due date'])
-                        days_to_po = (po_date - datetime.now()).days
-                        
-                        if days_to_po < 7 and days_to_po >= 0:
-                            st.warning(f"**{row['Event']}**\nPO DUE SOON: {po_date.date()} ({days_to_po} days!)")
-                        elif days_to_po < 0:
-                            st.error(f"**{row['Event']}**\nPO OVERDUE: {po_date.date()}")
-                        else:
-                            st.success(f"**{row['Event']}**\nPO Due: {po_date.date()}")
-                except Exception as e: 
-                    st.info("Check column names in FP&A sheet to activate auto-alarms.")
+                        # Using exact column names from your screenshot
+                        po_col = 'Long Form PO due date'
+                        if po_col in df_plan.columns and pd.notnull(row[po_col]):
+                            po_date = pd.to_datetime(row[po_col])
+                            days_to_po = (po_date - datetime.now()).days
+                            if days_to_po < 7 and days_to_po >= 0:
+                                st.warning(f"**{row.get('Event', 'Meeting')}**\nPO DUE: {po_date.date()} ({days_to_po} days!)")
+                            elif days_to_po < 0:
+                                st.error(f"**{row.get('Event', 'Meeting')}**\nPO OVERDUE: {po_date.date()}")
+                            else:
+                                st.success(f"**{row.get('Event', 'Meeting')}**\nPO Due: {po_date.date()}")
+                except: st.info("Deadlines will appear once dates are entered in the sheet.")
 
-    # --- TAB 3: REPOSITORY ---
     with tab3:
-        st.subheader("🏛️ Knowledge Base Documents")
+        st.subheader("🏛️ Knowledge Base")
         if kb_files:
             for f in kb_files: st.write(f"✅ **{os.path.basename(f)}**")
         else:
@@ -223,4 +201,4 @@ else:
     with col2:
         st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=150)
         st.markdown("<h2 style='text-align: center; color: #fee123;'>AUTHENTICATION REQUIRED</h2>", unsafe_allow_html=True)
-        st.info("Enter the Treasurer Access Code in the sidebar.")
+        st.info("Enter the Access Code in the sidebar.")
