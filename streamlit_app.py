@@ -29,36 +29,46 @@ LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=2020294064"
 
 @st.cache_data(ttl=30)
-def load_and_clean_data(url, skip=0):
+def load_and_clean_ledger(url):
     try:
-        df = pd.read_csv(url, skiprows=skip)
-        # 1. Clean Column Names
-        df.columns = [str(c).strip() for c in df.columns]
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        df = df.dropna(how='all', axis=0)
+        # Load raw data
+        df = pd.read_csv(url, header=None)
         
-        # 2. Clean Currency Data (Turns "$1,000" into 1000.0)
+        # FIND THE REAL DATA: Look for the row containing "Advertising" or "AI Workshops"
+        # This fixes the "Unnamed Column" and "Merged Cell" issues
+        data_start_row = 0
+        for i, row in df.iterrows():
+            row_str = " ".join(map(str, row.values))
+            if "Advertising" in row_str or "Administrative" in row_str:
+                data_start_row = i
+                break
+        
+        # Re-load from that row
+        df = pd.read_csv(url, skiprows=data_start_row)
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Clean up empty columns
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        
+        # Clean currency columns: remove $, commas, and turn to numbers
         for col in df.columns:
             if df[col].dtype == 'object':
-                # Check if it looks like money
-                if df[col].str.contains('\$', na=False).any():
-                    df[col] = df[col].replace('[\$,]', '', regex=True).astype(float, errors='ignore')
-        return df
+                df[col] = df[col].replace(r'[\$,\s]', '', regex=True)
+                # Attempt to convert to numeric, ignore errors for category names
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+        
+        return df.dropna(how='all', axis=0)
     except:
         return None
 
-def load_kb():
-    text = ""
-    kb_path = "knowledge_base"
-    if not os.path.exists(kb_path): return ""
-    for f in glob.glob(os.path.join(kb_path, "*.pdf")):
-        try:
-            reader = PdfReader(f)
-            for page in reader.pages:
-                content = page.extract_text()
-                if content: text += content + "\n"
-        except: pass
-    return text
+@st.cache_data(ttl=30)
+def load_fp_and_a(url):
+    try:
+        df = pd.read_csv(url, skiprows=3) # Your planning tab starts at row 4
+        df.columns = [str(c).strip() for c in df.columns]
+        return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+    except:
+        return None
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -79,10 +89,9 @@ if access_code == "AICLUBTREASURE":
     if "messages" not in st.session_state: st.session_state.messages = []
 
     # LOAD DATA
-    df_ledger = load_and_clean_data(LEDGER_URL, skip=0)
-    df_plan = load_and_clean_data(PLANNING_URL, skip=3)
-    kb_text = load_kb()
-
+    df_ledger = load_and_clean_ledger(LEDGER_URL)
+    df_plan = load_fp_and_a(PLANNING_URL)
+    
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["💬 Strategic Chat", "📅 Live Planning"])
@@ -91,7 +100,7 @@ if access_code == "AICLUBTREASURE":
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("Ex: Calculate pizza budget per meeting..."):
+        if query := st.chat_input("Ex: How much can we spend per meeting on pizza?"):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
@@ -99,45 +108,45 @@ if access_code == "AICLUBTREASURE":
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
+                # --- EXECUTIVE MATH PROMPT ---
                 system_prompt = f"""
                 ROLE: UO AI Club Executive Treasurer.
                 
-                DATA ASSETS:
-                1. LEDGER (Budget Source): 
-                {df_ledger.to_string() if df_ledger is not None else "Ledger missing"}
+                DATA:
+                1. LEDGER (Budget Sources): 
+                {df_ledger.to_string() if df_ledger is not None else "Ledger Error"}
                 
-                2. SPRING TERM FP&A (Event Schedule): 
-                {df_plan.to_string() if df_plan is not None else "Plan missing"}
+                2. FP&A (Spring Event Schedule): 
+                {df_plan.to_string() if df_plan is not None else "Plan Error"}
 
                 INSTRUCTIONS:
-                - You are a MATH-FIRST bot. If asked to calculate "per meeting" costs:
-                  a) Count the number of meetings in the FP&A table.
-                  b) Find the corresponding 'Adjusted Budget' for that line item in the Ledger.
-                  c) Perform the division and show your work in a Markdown Table.
-                - Never say you don't have the data if it exists in the tables above. Look for 'AI Workshop' or 'AI Workshops'.
-                - All currency is in USD. 
-
-                UO BRAND: Professional, strategic, and Ducks-focused.
+                - You are an expert at spreadsheet math. 
+                - If the user asks for a 'per meeting' calculation:
+                    1. Find the Budget Category in the LEDGER (usually in a column like 'Adjusted Budget' or similar).
+                    2. Count the number of 'Meetings' or 'Workshops' in the FP&A PLAN.
+                    3. DIVIDE the total budget by the number of meetings.
+                    4. SHOW THE MATH clearly in a table.
+                - Don't give up. If you see 'AI workshops' and a number like '3055.88' anywhere in the same row, USE IT.
+                - Use Oregon Ducks terminology.
                 """
                 
-                with st.spinner("Calculating Financial Scenarios..."):
+                with st.spinner("Calculating Financial Strategy..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
                 with st.chat_message("assistant"): st.markdown(ai_resp)
                 st.session_state.messages.append({"role": "assistant", "content": ai_resp})
             except Exception as e:
-                st.error(f"AI System Error: {e}")
+                st.error(f"AI Error: {e}")
 
     with tab2:
         st.subheader("🗓️ Current FP&A Schedule")
-        if df_plan is not None and not df_plan.empty:
+        if df_plan is not None:
             st.dataframe(df_plan, use_container_width=True)
-            # Display Ledger in Tab 2 so you can verify the numbers are there
-            with st.expander("📂 View Ledger (Budget Sources)"):
+            with st.expander("📂 View Cleaned Ledger (Verify Numbers)"):
                 st.dataframe(df_ledger)
         else:
-            st.error("Could not load Google Sheet data.")
+            st.error("Check Google Sheet Connection.")
 
 else:
     st.info("Enter Access Code in the sidebar.")
