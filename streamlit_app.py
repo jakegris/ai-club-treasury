@@ -29,33 +29,29 @@ LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=2020294064"
 
 @st.cache_data(ttl=30)
-def load_and_clean_ledger(url):
+def load_ledger_pro(url):
     try:
-        # Load raw data
-        df = pd.read_csv(url, header=None)
+        # Load raw
+        df_raw = pd.read_csv(url, header=None)
         
-        # FIND THE REAL DATA: Look for the row containing "Advertising" or "AI Workshops"
-        # This fixes the "Unnamed Column" and "Merged Cell" issues
-        data_start_row = 0
-        for i, row in df.iterrows():
-            row_str = " ".join(map(str, row.values))
-            if "Advertising" in row_str or "Administrative" in row_str:
-                data_start_row = i
+        # Search for the row containing "Administrative" or "Advertising" to find the header start
+        header_idx = 0
+        for i, row in df_raw.iterrows():
+            if any(x in str(row.values) for x in ["Administrative", "Advertising", "AI workshops"]):
+                header_idx = i - 1 if i > 0 else 0
                 break
         
-        # Re-load from that row
-        df = pd.read_csv(url, skiprows=data_start_row)
+        # Reload with proper headers
+        df = pd.read_csv(url, skiprows=header_idx)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Clean up empty columns
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        
-        # Clean currency columns: remove $, commas, and turn to numbers
+        # CLEANING: Find the 'Category' column (it's the one with text names)
+        # Find the 'Budget' columns (they have numbers or $)
         for col in df.columns:
             if df[col].dtype == 'object':
-                df[col] = df[col].replace(r'[\$,\s]', '', regex=True)
-                # Attempt to convert to numeric, ignore errors for category names
-                df[col] = pd.to_numeric(df[col], errors='ignore')
+                # Convert currency strings "$3,000.00" -> 3000.0
+                clean_col = df[col].replace(r'[\$,\s]', '', regex=True)
+                df[col + "_NUM"] = pd.to_numeric(clean_col, errors='coerce')
         
         return df.dropna(how='all', axis=0)
     except:
@@ -64,32 +60,31 @@ def load_and_clean_ledger(url):
 @st.cache_data(ttl=30)
 def load_fp_and_a(url):
     try:
-        df = pd.read_csv(url, skiprows=3) # Your planning tab starts at row 4
+        # Your planning tab starts at row 4
+        df = pd.read_csv(url, skiprows=3) 
         df.columns = [str(c).strip() for c in df.columns]
         return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
     except:
         return None
 
-# --- 3. SIDEBAR ---
+# --- 3. MAIN APP LOGIC ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
     access_code = st.text_input("Access Code", type="password")
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
-        st.error("Missing API Key in Secrets Vault!")
-        st.stop()
+        st.error("Missing API Key!"); st.stop()
     if st.button("Reset Chat"):
         st.session_state.messages = []
         st.rerun()
 
-# --- 4. MAIN APP ---
 if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # LOAD DATA
-    df_ledger = load_and_clean_ledger(LEDGER_URL)
+    # DATA SYNC
+    df_ledger = load_ledger_pro(LEDGER_URL)
     df_plan = load_fp_and_a(PLANNING_URL)
     
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
@@ -100,7 +95,7 @@ if access_code == "AICLUBTREASURE":
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("Ex: How much can we spend per meeting on pizza?"):
+        if query := st.chat_input("Ex: Calculate budget per meeting for AI Workshops"):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
@@ -108,45 +103,50 @@ if access_code == "AICLUBTREASURE":
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                # --- EXECUTIVE MATH PROMPT ---
+                # --- DATA FLATTENING FOR AI ---
+                # We extract the specific row for AI workshops to make it impossible to miss
+                if df_ledger is not None:
+                    # Look for row containing AI workshops
+                    mask = df_ledger.apply(lambda row: row.astype(str).str.contains('AI workshop', case=False).any(), axis=1)
+                    ai_row = df_ledger[mask]
+                    ledger_context = ai_row.to_string() if not ai_row.empty else df_ledger.to_string()
+                else:
+                    ledger_context = "Ledger not found."
+
                 system_prompt = f"""
-                ROLE: UO AI Club Executive Treasurer.
+                ROLE: UO AI Club Executive Treasurer Advisor.
                 
-                DATA:
-                1. LEDGER (Budget Sources): 
-                {df_ledger.to_string() if df_ledger is not None else "Ledger Error"}
+                LEDGER DATA (CRITICAL): 
+                {ledger_context}
                 
-                2. FP&A (Spring Event Schedule): 
-                {df_plan.to_string() if df_plan is not None else "Plan Error"}
+                PLANNING DATA: 
+                {df_plan.to_string() if df_plan is not None else "Plan not found."}
 
                 INSTRUCTIONS:
-                - You are an expert at spreadsheet math. 
-                - If the user asks for a 'per meeting' calculation:
-                    1. Find the Budget Category in the LEDGER (usually in a column like 'Adjusted Budget' or similar).
-                    2. Count the number of 'Meetings' or 'Workshops' in the FP&A PLAN.
-                    3. DIVIDE the total budget by the number of meetings.
-                    4. SHOW THE MATH clearly in a table.
-                - Don't give up. If you see 'AI workshops' and a number like '3055.88' anywhere in the same row, USE IT.
-                - Use Oregon Ducks terminology.
+                - ALWAYS perform the math. If you see a number like 3055.88 associated with 'AI workshops', use it.
+                - STEP 1: Identify the total budget for the category mentioned.
+                - STEP 2: Count the unique meeting dates in the Planning Data.
+                - STEP 3: Divide the budget by the count. 
+                - Format your answer with a Markdown table and a 'Treasurer's Recommendation'.
+                - Be a proud Oregon Duck!
                 """
                 
-                with st.spinner("Calculating Financial Strategy..."):
+                with st.spinner("Quacking the numbers..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
                 with st.chat_message("assistant"): st.markdown(ai_resp)
                 st.session_state.messages.append({"role": "assistant", "content": ai_resp})
             except Exception as e:
-                st.error(f"AI Error: {e}")
+                st.error(f"AI System Error: {e}")
 
     with tab2:
         st.subheader("🗓️ Current FP&A Schedule")
         if df_plan is not None:
             st.dataframe(df_plan, use_container_width=True)
-            with st.expander("📂 View Cleaned Ledger (Verify Numbers)"):
+            with st.expander("📂 Ledger Raw View (Search for AI workshops)"):
                 st.dataframe(df_ledger)
         else:
-            st.error("Check Google Sheet Connection.")
-
+            st.error("Connection Error.")
 else:
     st.info("Enter Access Code in the sidebar.")
