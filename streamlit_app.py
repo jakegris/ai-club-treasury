@@ -25,49 +25,39 @@ st.markdown("""
 
 # --- 2. DATA SOURCE CONFIG ---
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
+# Using GIDs to ensure we hit the right tabs
 LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=0"
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=2020294064"
 
 @st.cache_data(ttl=30)
-def load_ledger_pro(url):
+def smart_load_sheet(url, search_term):
+    """Scans the sheet to find where the real data starts based on a search term (e.g. 'Date')"""
     try:
-        # Load raw
-        df_raw = pd.read_csv(url, header=None)
-        
-        # Search for the row containing "Administrative" or "Advertising" to find the header start
-        header_idx = 0
-        for i, row in df_raw.iterrows():
-            if any(x in str(row.values) for x in ["Administrative", "Advertising", "AI workshops"]):
-                header_idx = i - 1 if i > 0 else 0
+        raw_df = pd.read_csv(url, header=None)
+        start_row = 0
+        for i, row in raw_df.iterrows():
+            if search_term in str(row.values):
+                start_row = i
                 break
         
         # Reload with proper headers
-        df = pd.read_csv(url, skiprows=header_idx)
+        df = pd.read_csv(url, skiprows=start_row)
         df.columns = [str(c).strip() for c in df.columns]
+        # Drop empty columns and rows
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        df = df.dropna(how='all', axis=0)
         
-        # CLEANING: Find the 'Category' column (it's the one with text names)
-        # Find the 'Budget' columns (they have numbers or $)
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                # Convert currency strings "$3,000.00" -> 3000.0
-                clean_col = df[col].replace(r'[\$,\s]', '', regex=True)
-                df[col + "_NUM"] = pd.to_numeric(clean_col, errors='coerce')
-        
-        return df.dropna(how='all', axis=0)
+        # Clean currency for ledger
+        if search_term != "Date": # This is the Ledger
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    clean_val = df[col].replace(r'[\$,\s]', '', regex=True)
+                    df[col] = pd.to_numeric(clean_val, errors='ignore')
+        return df
     except:
         return None
 
-@st.cache_data(ttl=30)
-def load_fp_and_a(url):
-    try:
-        # Your planning tab starts at row 4
-        df = pd.read_csv(url, skiprows=3) 
-        df.columns = [str(c).strip() for c in df.columns]
-        return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
-    except:
-        return None
-
-# --- 3. MAIN APP LOGIC ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
     access_code = st.text_input("Access Code", type="password")
@@ -75,17 +65,15 @@ with st.sidebar:
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
         st.error("Missing API Key!"); st.stop()
-    if st.button("Reset Chat"):
-        st.session_state.messages = []
-        st.rerun()
 
+# --- 4. MAIN APP ---
 if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # DATA SYNC
-    df_ledger = load_ledger_pro(LEDGER_URL)
-    df_plan = load_fp_and_a(PLANNING_URL)
+    # LOAD DATA USING SMART SEARCH
+    df_ledger = smart_load_sheet(LEDGER_URL, "Advertising") # Ledger usually has Advertising
+    df_plan = smart_load_sheet(PLANNING_URL, "Date") # Planning has Date
     
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
 
@@ -95,7 +83,7 @@ if access_code == "AICLUBTREASURE":
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("Ex: Calculate budget per meeting for AI Workshops"):
+        if query := st.chat_input("Ex: Calculate budget for all spring meetings..."):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
@@ -103,35 +91,30 @@ if access_code == "AICLUBTREASURE":
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                # --- DATA FLATTENING FOR AI ---
-                # We extract the specific row for AI workshops to make it impossible to miss
-                if df_ledger is not None:
-                    # Look for row containing AI workshops
-                    mask = df_ledger.apply(lambda row: row.astype(str).str.contains('AI workshop', case=False).any(), axis=1)
-                    ai_row = df_ledger[mask]
-                    ledger_context = ai_row.to_string() if not ai_row.empty else df_ledger.to_string()
-                else:
-                    ledger_context = "Ledger not found."
-
+                # --- STRATEGIC PROMPT ---
                 system_prompt = f"""
                 ROLE: UO AI Club Executive Treasurer Advisor.
                 
-                LEDGER DATA (CRITICAL): 
-                {ledger_context}
-                
-                PLANNING DATA: 
-                {df_plan.to_string() if df_plan is not None else "Plan not found."}
+                TRUTH CHECK:
+                - The Spring Term officially begins with the meeting on 4/6/2026.
+                - DO NOT skip the first rows of the data. 
+                - Count EVERY meeting listed in the FP&A table below, starting from the very first row.
+
+                SPRING TERM FP&A (Event Schedule): 
+                {df_plan.to_string() if df_plan is not None else "Plan Error"}
+
+                LEDGER DATA (Budgets): 
+                {df_ledger.to_string() if df_ledger is not None else "Ledger Error"}
 
                 INSTRUCTIONS:
-                - ALWAYS perform the math. If you see a number like 3055.88 associated with 'AI workshops', use it.
-                - STEP 1: Identify the total budget for the category mentioned.
-                - STEP 2: Count the unique meeting dates in the Planning Data.
-                - STEP 3: Divide the budget by the count. 
-                - Format your answer with a Markdown table and a 'Treasurer's Recommendation'.
-                - Be a proud Oregon Duck!
+                1. Look at the FIRST ROW of the FP&A table. Is it 4/6/2026? Use it.
+                2. Count the total number of meetings (it should be 9 meetings total).
+                3. Find the 'AI Workshops' budget in the Ledger (Approx $3,055).
+                4. Divide that budget by the TOTAL number of meetings.
+                5. Show your math in a table.
                 """
                 
-                with st.spinner("Quacking the numbers..."):
+                with st.spinner("Analyzing full term schedule..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
@@ -141,12 +124,12 @@ if access_code == "AICLUBTREASURE":
                 st.error(f"AI System Error: {e}")
 
     with tab2:
-        st.subheader("🗓️ Current FP&A Schedule")
+        st.subheader("🗓️ Spring Term Schedule")
         if df_plan is not None:
             st.dataframe(df_plan, use_container_width=True)
-            with st.expander("📂 Ledger Raw View (Search for AI workshops)"):
-                st.dataframe(df_ledger)
+            # Display a confirmation so you know it sees row 1
+            st.success(f"**Confirmation:** The bot detects the first meeting is on **{df_plan.iloc[0].get('Date', 'Unknown')}**.")
         else:
-            st.error("Connection Error.")
+            st.error("Check Google Sheet Connection.")
 else:
     st.info("Enter Access Code in the sidebar.")
