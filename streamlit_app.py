@@ -29,16 +29,22 @@ LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=2020294064"
 
 @st.cache_data(ttl=30)
-def load_sheet_data(url, skip=0):
+def load_and_clean_data(url, skip=0):
     try:
         df = pd.read_csv(url, skiprows=skip)
-        # Clean up: remove columns that are entirely NaN
-        df = df.dropna(how='all', axis=1)
-        # Clean column names: remove whitespace and 'Unnamed' columns
+        # 1. Clean Column Names
         df.columns = [str(c).strip() for c in df.columns]
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-        return df.dropna(how='all', axis=0)
-    except Exception as e:
+        df = df.dropna(how='all', axis=0)
+        
+        # 2. Clean Currency Data (Turns "$1,000" into 1000.0)
+        for col in df.columns:
+            if df[col].dtype == 'object':
+                # Check if it looks like money
+                if df[col].str.contains('\$', na=False).any():
+                    df[col] = df[col].replace('[\$,]', '', regex=True).astype(float, errors='ignore')
+        return df
+    except:
         return None
 
 def load_kb():
@@ -58,13 +64,11 @@ def load_kb():
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/f/f8/Oregon_Ducks_logo.svg/1200px-Oregon_Ducks_logo.svg.png", width=100)
     access_code = st.text_input("Access Code", type="password")
-    
     if "GEMINI_API_KEY" in st.secrets:
         api_key = st.secrets["GEMINI_API_KEY"]
     else:
         st.error("Missing API Key in Secrets Vault!")
         st.stop()
-        
     if st.button("Reset Chat"):
         st.session_state.messages = []
         st.rerun()
@@ -74,9 +78,9 @@ if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Load Data: Ledger (skip 0) | Planning (skip 3)
-    df_ledger = load_sheet_data(LEDGER_URL, skip=0)
-    df_plan = load_sheet_data(PLANNING_URL, skip=3)
+    # LOAD DATA
+    df_ledger = load_and_clean_data(LEDGER_URL, skip=0)
+    df_plan = load_and_clean_data(PLANNING_URL, skip=3)
     kb_text = load_kb()
 
     st.markdown("<h1 style='text-align: center; color: #fee123; margin-bottom: 0;'>DUCKS AI TREASURY</h1>", unsafe_allow_html=True)
@@ -87,7 +91,7 @@ if access_code == "AICLUBTREASURE":
         for m in st.session_state.messages:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-        if query := st.chat_input("Ask a treasury question..."):
+        if query := st.chat_input("Ex: Calculate pizza budget per meeting..."):
             st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"): st.markdown(query)
 
@@ -96,27 +100,27 @@ if access_code == "AICLUBTREASURE":
                 model = genai.GenerativeModel(available_models[0])
                 
                 system_prompt = f"""
-                ROLE: UO AI Club Executive Treasurer Advisor.
+                ROLE: UO AI Club Executive Treasurer.
                 
-                TRUTH HIERARCHY:
-                1. PRIMARY TRUTH: 'SPRING TERM FP&A' Table. 
-                2. SECONDARY TRUTH: 'LEDGER' for current money.
-
-                INSTRUCTIONS:
-                - Use the spreadsheet dates for all deadlines. 
-                - The first meeting of Spring is in the first row of the data.
-
-                SPRING TERM FP&A DATA:
-                {df_plan.to_string() if df_plan is not None else "Plan missing"}
-
-                LEDGER DATA:
+                DATA ASSETS:
+                1. LEDGER (Budget Source): 
                 {df_ledger.to_string() if df_ledger is not None else "Ledger missing"}
                 
-                REFERENCE HANDBOOK:
-                {kb_text[:8000]}
+                2. SPRING TERM FP&A (Event Schedule): 
+                {df_plan.to_string() if df_plan is not None else "Plan missing"}
+
+                INSTRUCTIONS:
+                - You are a MATH-FIRST bot. If asked to calculate "per meeting" costs:
+                  a) Count the number of meetings in the FP&A table.
+                  b) Find the corresponding 'Adjusted Budget' for that line item in the Ledger.
+                  c) Perform the division and show your work in a Markdown Table.
+                - Never say you don't have the data if it exists in the tables above. Look for 'AI Workshop' or 'AI Workshops'.
+                - All currency is in USD. 
+
+                UO BRAND: Professional, strategic, and Ducks-focused.
                 """
                 
-                with st.spinner("Analyzing..."):
+                with st.spinner("Calculating Financial Scenarios..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
@@ -129,16 +133,9 @@ if access_code == "AICLUBTREASURE":
         st.subheader("🗓️ Current FP&A Schedule")
         if df_plan is not None and not df_plan.empty:
             st.dataframe(df_plan, use_container_width=True)
-            
-            # Robust logic to find the first meeting date
-            # We look for the first column that has 'Date' in its name
-            date_col = next((c for c in df_plan.columns if 'Date' in c), None)
-            
-            if date_col:
-                first_date = df_plan.iloc[0][date_col]
-                st.info(f"**System Check:** The bot correctly sees the first meeting scheduled for **{first_date}**.")
-            else:
-                st.warning(f"Could not find a column named 'Date'. Available columns are: {list(df_plan.columns)}")
+            # Display Ledger in Tab 2 so you can verify the numbers are there
+            with st.expander("📂 View Ledger (Budget Sources)"):
+                st.dataframe(df_ledger)
         else:
             st.error("Could not load Google Sheet data.")
 
