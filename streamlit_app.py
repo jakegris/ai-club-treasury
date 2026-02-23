@@ -24,7 +24,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. DATA SOURCE CONFIG ---
-# Using the Viz API (More stable for Streamlit)
 SHEET_ID = "1xHaK_bcyCsQButBmceqd2-BippPWVVZYsUbwHlN0jEM"
 LEDGER_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=0"
 PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid=2020294064"
@@ -32,10 +31,13 @@ PLANNING_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=o
 @st.cache_data(ttl=30)
 def load_sheet_data(url, skip=0):
     try:
-        # We use 'skiprows' to handle the Row 4 headers in your FP&A sheet
         df = pd.read_csv(url, skiprows=skip)
+        # Clean up: remove columns that are entirely NaN
+        df = df.dropna(how='all', axis=1)
+        # Clean column names: remove whitespace and 'Unnamed' columns
         df.columns = [str(c).strip() for c in df.columns]
-        return df.dropna(how='all', axis=0).dropna(how='all', axis=1)
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+        return df.dropna(how='all', axis=0)
     except Exception as e:
         return None
 
@@ -72,7 +74,7 @@ if access_code == "AICLUBTREASURE":
     genai.configure(api_key=api_key)
     if "messages" not in st.session_state: st.session_state.messages = []
 
-    # Load Data: Ledger (gid 0, skip 0) | Planning (gid 2020294064, skip 3)
+    # Load Data: Ledger (skip 0) | Planning (skip 3)
     df_ledger = load_sheet_data(LEDGER_URL, skip=0)
     df_plan = load_sheet_data(PLANNING_URL, skip=3)
     kb_text = load_kb()
@@ -93,19 +95,16 @@ if access_code == "AICLUBTREASURE":
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                 model = genai.GenerativeModel(available_models[0])
                 
-                # --- HIERARCHY PROMPT ---
                 system_prompt = f"""
                 ROLE: UO AI Club Executive Treasurer Advisor.
                 
                 TRUTH HIERARCHY:
-                1. PRIMARY TRUTH: 'SPRING TERM FP&A' Table. If a date (like Catering Waiver) is here, IT IS THE FINAL ANSWER.
+                1. PRIMARY TRUTH: 'SPRING TERM FP&A' Table. 
                 2. SECONDARY TRUTH: 'LEDGER' for current money.
-                3. TERTIARY: 'HANDBOOK' for general rules.
 
-                RULES:
-                - Do NOT calculate dates if they exist in the spreadsheet.
-                - The first meeting of Spring is listed in the first row of the FP&A table below.
-                - If the table says a waiver is due 3/23/2026, then 3/23/2026 is the answer, regardless of any 5-day or 7-day rules in the handbook.
+                INSTRUCTIONS:
+                - Use the spreadsheet dates for all deadlines. 
+                - The first meeting of Spring is in the first row of the data.
 
                 SPRING TERM FP&A DATA:
                 {df_plan.to_string() if df_plan is not None else "Plan missing"}
@@ -117,7 +116,7 @@ if access_code == "AICLUBTREASURE":
                 {kb_text[:8000]}
                 """
                 
-                with st.spinner("Analyzing Ledger & Deadlines..."):
+                with st.spinner("Analyzing..."):
                     response = model.generate_content(f"{system_prompt}\n\nUSER QUESTION: {query}")
                     ai_resp = response.text
                 
@@ -128,12 +127,20 @@ if access_code == "AICLUBTREASURE":
 
     with tab2:
         st.subheader("🗓️ Current FP&A Schedule")
-        if df_plan is not None:
+        if df_plan is not None and not df_plan.empty:
             st.dataframe(df_plan, use_container_width=True)
-            # Verification for you to see it's reading correctly:
-            st.info(f"**System Check:** The bot currently sees the first meeting scheduled for **{df_plan.iloc[0]['Date']}**.")
+            
+            # Robust logic to find the first meeting date
+            # We look for the first column that has 'Date' in its name
+            date_col = next((c for c in df_plan.columns if 'Date' in c), None)
+            
+            if date_col:
+                first_date = df_plan.iloc[0][date_col]
+                st.info(f"**System Check:** The bot correctly sees the first meeting scheduled for **{first_date}**.")
+            else:
+                st.warning(f"Could not find a column named 'Date'. Available columns are: {list(df_plan.columns)}")
         else:
-            st.error("Could not load Google Sheet data. Please check connection.")
+            st.error("Could not load Google Sheet data.")
 
 else:
     st.info("Enter Access Code in the sidebar.")
